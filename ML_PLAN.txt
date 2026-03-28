@@ -1,0 +1,235 @@
+ML PLAN - FINDIT 2026 FACE SPOOFING (BABAK PENYISIHAN)
+Tanggal update: 27 Maret 2026
+
+1. Define Problem (Problem Definition)
+Tujuan: Memastikan problem jelas, terukur, dan layak diselesaikan dengan ML.
+
+1.1 Background Masalah
+- Sistem face recognition rentan terhadap serangan spoofing (printed, screen, mask, mannequin, dan unknown).
+- Kompetisi meminta klasifikasi citra wajah ke 6 kelas untuk membedakan realperson dan berbagai tipe spoofing.
+- Stakeholder utama: tim lomba (3 orang), penyelenggara kompetisi, dan evaluator leaderboard.
+
+1.2 Problem Statement
+- Bangun model computer vision berbasis citra yang mampu mengklasifikasikan input wajah ke 6 kelas secara robust pada data test tersembunyi kompetisi.
+- Optimasi utama diarahkan ke skor leaderboard menggunakan metrik resmi kompetisi.
+
+1.3 Jenis Problem
+- Supervised Learning
+- Multi-class Image Classification (6 kelas)
+- Domain: Computer Vision
+
+1.4 Success Metric
+- Metrik resmi: Macro F1 (utama).
+- Metrik pantau tambahan: F1_i, Precision_i, Recall_i per kelas.
+
+1.5 Constraints
+- Waktu babak penyisihan: 14 hari.
+- Batas submit: 3 submit per hari (tim 3 orang, target operasional: 1 submit per orang per hari jika dibutuhkan).
+- Data eksternal: tidak boleh digunakan.
+- Resource awal: GPU lokal RTX 3050 6GB VRAM; opsi pindah ke Colab jika eksperimen berat.
+- Batas praktis durasi training: target <= 3 jam per run.
+- Submission output wajib: file submission sesuai format panitia.
+
+
+2. Data Understanding & Planning
+Tujuan: Memahami data dan merancang pipeline.
+
+2.1 Data Source
+- Train images per class di data/raw/train/<class_name>/
+- Test images di data/raw/test/
+- Template submission di data/raw/samplesubmission.csv
+
+2.2 Ringkasan Data Awal (audit)
+- Total train: 1652 image
+- Total test: 404 image
+- Distribusi train:
+   - realperson: 465
+   - fake_unknown: 338
+   - fake_mask: 278
+   - fake_screen: 229
+   - fake_mannequin: 224
+   - fake_printed: 118
+- Catatan: class imbalance terlihat jelas, khususnya fake_printed.
+
+2.3 Feature Awal (Hipotesis)
+- Cues tekstur (moiré layar, noise cetak, material masker/mannequin).
+- Cues refleksi cahaya dan ketajaman detail kulit.
+- Artefak domain spoofing (tepi media cetak/screen, pola display).
+
+2.4 Target Variable
+- label dengan 6 kelas:
+   - realperson
+   - fake_printed
+   - fake_screen
+   - fake_mask
+   - fake_mannequin
+   - fake_unknown
+
+2.5 Data Leakage Check
+- Tidak ada metadata waktu/ID orang eksplisit, tetapi tetap cek:
+   - duplikasi gambar lintas split,
+   - near-duplicate antar fold,
+   - distribusi file extension dan resolusi agar tidak memicu shortcut learning.
+- Split validasi dilakukan hanya dari train set, test tidak disentuh saat training/tuning.
+
+2.6 Pipeline Plan
+- Ingest path + label mapping
+- Data quality checks (corrupt, duplicate, shape stats)
+- Stratified 5-Fold split
+- Training per fold
+- OOF evaluation (Macro F1 + per-class metrics)
+- Inference test per fold
+- Probability averaging (ensemble antar fold)
+- Export submission
+
+
+3. Data Preparation
+Tujuan: Membuat data siap model.
+
+3.1 Data Cleaning
+- Validasi file bisa dibaca (drop/catat file corrupt jika ada).
+- Cek duplikasi hash exact; near-duplicate opsional jika waktu cukup.
+- Standarisasi pembacaan channel warna (RGB).
+
+3.2 Preprocessing
+- Resize awal: 224x224 (naik ke 288/320 bila resource memungkinkan dan validasi membaik).
+- Normalisasi ImageNet (karena transfer learning pretrained).
+- Extension campuran (jpg/jpeg/png) ditangani loader generik.
+
+3.3 Augmentation (train)
+- Horizontal flip
+- Random brightness/contrast
+- Color jitter ringan
+- Compression/noise ringan
+- Hindari augmentasi ekstrem yang merusak cue spoofing.
+
+3.4 Split Data
+- Stratified K-Fold = 5 fold (fixed random seed = 42).
+- Simpan split CSV di data/splits untuk reproducibility.
+
+
+4. Modeling
+Tujuan: Membangun dan membandingkan model.
+
+4.1 Baseline Model (wajib cepat jadi)
+- Backbone baseline: ConvNeXt-Tiny atau EfficientNet-B3 dengan prioritas konfigurasi aman VRAM.
+- Loss: Weighted Cross Entropy (karena imbalance).
+- Optimizer: AdamW.
+- Scheduler: Cosine Annealing + warmup singkat.
+
+4.2 Candidate Advanced Models
+- EfficientNetV2-S (jika muat di VRAM / gunakan mixed precision + batch kecil).
+- ConvNeXt-Tiny/Small.
+- Opsional jika waktu cukup: timm model sekelas RegNetY/MaxViT kecil.
+- Catatan eksekusi: default mulai dari model yang aman VRAM, baru scale-up jika ada ruang resource/waktu.
+
+4.3 Training Strategy
+- Mixed precision (AMP) untuk efisiensi GPU.
+- Early stopping berbasis valid Macro F1.
+- Gradient accumulation jika batch size terlalu kecil.
+
+4.4 Hyperparameter Tuning
+- Tahap cepat (manual + random search terbatas):
+   - learning rate
+   - weight decay
+   - batch size
+   - augment intensity
+   - input size
+- Optuna opsional jika waktu mencukupi setelah baseline stabil.
+
+4.5 Ensemble Strategy
+- Minimal: fold-ensemble (average probability dari 5 fold).
+- Lanjutan: model-ensemble 2 backbone terbaik jika gain validasi konsisten.
+- TTA: digunakan hanya jika ada kenaikan Macro F1 yang konsisten di validasi internal.
+
+
+5. Evaluation & Analysis
+Tujuan: Menilai apakah model layak dipakai.
+
+5.1 Metric Evaluation
+- Macro F1 (utama)
+- F1_i, Precision_i, Recall_i per kelas
+- Confusion matrix
+
+5.2 Error Analysis
+- Audit prediksi salah dengan confidence tinggi.
+- Fokus pasangan kelas sulit: fake_printed vs fake_screen vs fake_unknown.
+- Cek bias ke kelas mayoritas (realperson) dan minoritas (fake_printed).
+
+5.3 Model Comparison
+- Bandingkan run berdasarkan:
+   - OOF Macro F1
+   - stabilitas antar fold (std rendah)
+   - waktu training/inference
+   - kompleksitas model
+
+5.4 Decision Rule untuk Submit
+- Pilih kandidat submit hanya jika:
+   - OOF Macro F1 naik nyata dari baseline,
+   - tidak ada collapse per-class metric,
+   - hasil stabil di beberapa fold.
+
+
+6. Deployment & Experiment Tracking
+Tujuan: Membuat model usable dan eksperimen terdokumentasi.
+
+6.1 Model Saving
+- Simpan checkpoint per fold (best by valid Macro F1) di experiments/checkpoints.
+
+6.2 Inference Pipeline
+- Load semua checkpoint fold.
+- Inferensi test.
+- Average probability.
+- Map ke label final.
+- Export CSV format: id,label.
+
+6.3 Experiment Tracking
+- Gunakan MLflow sebagai tracker utama.
+- Simpan artifact/log ringkas juga di experiments/run_logs sebagai backup catatan run.
+- Simpan config run (seed, model, lr, augment, input size, fold) untuk reproducibility.
+- Konvensi nama run (rapi dan trackable): model_{backbone}_img{size}_fold{fold}_seed{seed}_lr{lr}_bs{batch}.
+
+
+7. Maintenance & Improvement (selama kompetisi)
+
+7.1 Monitoring
+- Pantau gap OOF vs leaderboard publik.
+- Jika gap besar, audit overfit dan validasi split.
+
+7.2 Iteration Strategy
+- Iterasi prioritas:
+   1) perbaiki augmentasi,
+   2) tuning hyperparameter,
+   3) ganti backbone,
+   4) ensemble,
+   5) TTA.
+
+7.3 Submit Management (3 submit/hari, tim 3 orang)
+- Atur submit harian terjadwal, hindari submit spekulatif.
+- Prioritas submit:
+   - Submit 1: kandidat paling stabil (safe).
+   - Submit 2: kandidat agresif (model/augment baru).
+   - Submit 3: ensemble/final harian bila ada peningkatan.
+
+
+8. Eksekusi Singkat 14 Hari (tanpa checklist detail)
+
+Fase 1 (Hari 1-3)
+- Finalisasi pipeline data + split + baseline pertama.
+
+Fase 2 (Hari 4-8)
+- Tuning utama (lr, augment, input size, backbone).
+
+Fase 3 (Hari 9-11)
+- Validasi kandidat terbaik + ensemble + TTA (jika bermanfaat).
+
+Fase 4 (Hari 12-14)
+- Freeze kandidat final, inferensi rapi, submit terkontrol, dan dokumentasi hasil.
+
+
+9. Final Output Requirement
+- Output wajib: submission CSV valid sesuai format panitia.
+- Internal tim (disarankan):
+   - catatan run terbaik,
+   - OOF summary,
+   - checkpoint terbaik untuk reproducibility.

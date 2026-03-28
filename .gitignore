@@ -11,3 +11,5 @@ wheels/
 
 # Etc
 data/
+experiments/
+output/
