@@ -11,5 +11,6 @@ wheels/
 
 # Etc
 data/
+data_drive/
 experiments/
 output/
